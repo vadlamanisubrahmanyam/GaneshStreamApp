@@ -1,0 +1,16 @@
+# Secrets
+.env
+
+# Local data & settings (per-machine, not shared)
+data/
+config/*.yaml
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
