@@ -36,7 +36,7 @@ never actually wired together:
 | Storage | Dashboard read `data/stream_results.db` / table `sentiment_results`; the collector wrote `data/analysis_results.db` / table `posts` — two databases that never met | One `DatabaseManager`, one path (`data/stream_results.db`), one schema, imported by both the collector and the dashboard |
 | Mastodon auth | Connector read env var `MASTODON_ACCESS_TOKEN`; `.env` defined `MASTODON_TOKEN` — token was always `None` | Standardised on `MASTODON_ACCESS_TOKEN` (old name still accepted as a fallback) |
 | Data model | `topic` was passed into `SocialPost` but not declared on the model, so Pydantic silently dropped it | `topic` is now a required field on `SocialPost`, persisted and used for dashboard filtering |
-| Sources | Reddit referenced in design docs and `requirements.txt`, never implemented; `base_collector.py` and `reddit_collector.py` were empty files | Dropped from v1 scope. A `BaseConnector` interface + registry pattern makes adding it (or Twitter/Facebook) later a self-contained change |
+| Sources | Reddit referenced in design docs and `requirements.txt`, never implemented; `base_collector.py` and `reddit_collector.py` were empty files | `RedditConnector` implemented (PRAW, `r/all` search), but Reddit's own Nov-2025 policy change now blocks new credentials — see §11. Bluesky added instead as the second live source (open public search, no approval gate) |
 | App structure | Three separate processes (Streamlit config UI → subprocess → separate Streamlit dashboard), coordinating over subprocess stdout | Merged into a single `app.py` with three tabs; the collector runs in-process, no subprocess/stdout parsing |
 | Error handling | Broad `try/except` blocks in `main.py` printed generic "Execution Error", hiding the real cause | Errors propagate to the UI log with the actual exception message |
 | AI model selection | Hardcoded string `gemini-2.0-flash`; broke with a 404 once Google retired that model | Model dropdown populated live from `client.models.list()`, filtered to models that support `generateContent`; falls back to a short static list if offline or unauthenticated |
@@ -45,7 +45,7 @@ never actually wired together:
 
 ## 3. User flow
 
-1. **Settings tab** — choose source (Mastodon live; Twitter/Facebook shown as "coming soon"), topic/hashtag, post limit, throttle seconds between AI calls, and Gemini model (live dropdown). Save writes `config/search_config.yaml`.
+1. **Settings tab** — choose source (Mastodon and Bluesky live; Reddit built but policy-gated, Twitter/Facebook shown as "coming soon"), topic/hashtag, post limit, throttle seconds between AI calls, and Gemini model (live dropdown). Save writes `config/search_config.yaml`.
 2. **Run Collector tab** — click Run now. For each fetched post: skip if already in the database (by post ID), otherwise send to Gemini, store the result, log one line to a live-updating log panel.
 3. **Dashboard tab** — reads the same database directly, lets the user filter by topic, shows post count and average sentiment score, and the full results table.
 
@@ -96,7 +96,7 @@ bottom, at the cost of the UI being busy while a run is in progress.
 |---|---|---|
 | `id` | TEXT (PK) | Source-native post ID; used for dedup |
 | `topic` | TEXT | The hashtag/topic searched for |
-| `source` | TEXT | `"mastodon"` today; `"twitter"` / `"facebook"` reserved |
+| `source` | TEXT | `"mastodon"` / `"bluesky"` today (live); `"reddit"` implemented but not offered (policy-gated); `"twitter"` / `"facebook"` reserved |
 | `author` | TEXT | Username |
 | `content` | TEXT | Post text, HTML-stripped |
 | `sentiment` | TEXT | e.g. "Positive" / "Negative" / "Neutral" |
@@ -122,10 +122,12 @@ class BaseConnector(ABC):
 
 `src/connectors/__init__.py` holds a `REGISTRY` dict mapping source name →
 connector class, and a `LIVE_SOURCES` list of which ones are actually
-usable today (`["mastodon"]`). Adding a new source is: implement the
-class, add one line to `REGISTRY`, add one line to `LIVE_SOURCES` once
-it's tested — `app.py` needs no changes, since the Settings tab reads the
-source list from these two structures.
+usable today (`["mastodon", "bluesky"]`). Reddit's connector is registered
+in `REGISTRY` but deliberately left out of `LIVE_SOURCES` (see §11) so the
+Settings tab doesn't offer a source that fails for almost everyone. Adding
+a new source is: implement the class, add one line to `REGISTRY`, add one
+line to `LIVE_SOURCES` once it's tested — `app.py` needs no changes, since
+the Settings tab reads the source list from these two structures.
 
 ---
 
@@ -182,7 +184,8 @@ See `README.md` for step-by-step deployment instructions.
 
 1. **Twitter/X connector** — stub exists (`src/connectors/twitter_connector.py`); needs actual API integration (note: X's API pricing/access tiers should be checked before committing, unlike Mastodon's free public API).
 2. **Facebook connector** — stub exists; Graph API's public content search is materially more restricted than Mastodon/Twitter, likely requiring an approved app and access to specific Pages rather than open keyword search.
-3. **Reddit connector** — dropped from v1, but the registry pattern makes it a clean re-add via PRAW.
+3. **Reddit connector** — code-complete (`RedditConnector`, PRAW, `r/all` search), but Reddit closed self-service OAuth app creation in November 2025 ("Responsible Builder Policy"). New credentials are rarely approved for personal/script use, so this source is kept out of `LIVE_SOURCES` until that changes. Re-enabling it later is a one-line change if you obtain credentials or the policy shifts.
+4. **Bluesky connector** — done (v2.1): open public search API (`app.bsky.feed.search_posts`), App Password auth, no approval process. Second live source alongside Mastodon.
 4. **Background/async runs** — if post limits grow large enough that a run takes minutes, consider moving the collector off the main Streamlit thread so the UI stays responsive.
 5. **Hosted deployment** — Streamlit Community Cloud, if/when the user wants this accessible outside their own laptop.
 

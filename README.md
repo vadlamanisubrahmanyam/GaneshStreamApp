@@ -14,7 +14,8 @@ few pieces that were never actually wired together correctly:
 | Dashboard read `data/stream_results.db` / table `sentiment_results`; the collector wrote `data/analysis_results.db` / table `posts` | One `DatabaseManager`, one path, one schema — imported everywhere |
 | Mastodon connector read `MASTODON_ACCESS_TOKEN`; `.env` defined `MASTODON_TOKEN` | Standardised on `MASTODON_ACCESS_TOKEN` (old name still works as a fallback) |
 | `topic` was passed to `SocialPost` but the model didn't declare that field, so Pydantic silently dropped it | `topic` is now a required field, stored and used for dashboard filtering |
-| Reddit was referenced in the design docs and `requirements.txt` but never implemented | Removed from v1 scope; a stub + registry pattern makes it a clean add-on later |
+| Reddit was referenced in the design docs and `requirements.txt` but never implemented | Implemented (read-only PRAW search across `r/all`) — but Reddit closed self-service API app creation in Nov 2025, so this connector is code-complete and untested against real traffic; see "About Reddit" below |
+| Only one source (Mastodon) was ever usable | Bluesky added as a second live source — open public search API, no approval gate |
 | Config manager, collector, and dashboard were 3 separate Streamlit/CLI processes talking over subprocess stdout (fragile, encoding issues) | Merged into one `app.py` with three tabs; collector runs in-process |
 | Errors were swallowed by broad `try/except` blocks | Failures now surface in the UI log instead of a generic "Execution Error" |
 | Gemini model was a hardcoded string (`gemini-2.0-flash`), which Google later retired, breaking every analysis with a 404 | Model is now a dropdown fetched live from `client.models.list()`, so it always matches what Google currently offers |
@@ -46,6 +47,8 @@ Open `.env` and fill in:
 - `GEMINI_API_KEY` — free tier key from https://aistudio.google.com/apikey
 - `MASTODON_ACCESS_TOKEN` — on your Mastodon instance: Settings → Development → New Application → copy the access token
 - `MASTODON_API_BASE_URL` — defaults to `https://mastodon.social`; change if you use a different instance
+- `BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD` — create an App Password in the Bluesky app under Settings → App Passwords (never your main password)
+- `REDDIT_ID` / `REDDIT_SECRET` — optional, only if you already have approved Reddit API credentials (see "About Reddit" below)
 
 Never commit `.env` — it's already in `.gitignore`.
 
@@ -96,6 +99,8 @@ This is what Streamlit itself is built for, it's free, and it fits your
    GEMINI_API_KEY = "your-key-here"
    MASTODON_ACCESS_TOKEN = "your-token-here"
    MASTODON_API_BASE_URL = "https://mastodon.social"
+   BLUESKY_HANDLE = "your-handle.bsky.social"
+   BLUESKY_APP_PASSWORD = "your-app-password"
    ```
    Streamlit Community Cloud exposes these as environment variables, so no
    code changes are needed — `os.getenv(...)` picks them up the same way.
@@ -118,12 +123,27 @@ about free-tier limits.
 ## Roadmap
 
 - [x] Mastodon connector + Gemini sentiment analysis + SQLite + dashboard
+- [x] Bluesky connector (public search API, App Password auth — no approval gate)
+- [x] Reddit connector — built (PRAW, `r/all` search), but **blocked by Reddit's
+      own policy**, not by this code. See "About Reddit" below.
 - [ ] Twitter/X connector (stub already in `src/connectors/twitter_connector.py`)
 - [ ] Facebook connector — note: Graph API's public search is much more
       restricted than Mastodon/Twitter; check current Meta Graph API terms
       before building this one
-- [ ] Reddit connector (dropped from v1 scope, easy to re-add via the same
-      `BaseConnector` pattern)
+
+### About Reddit
+
+Reddit introduced a "Responsible Builder Policy" in November 2025 that
+closed self-service OAuth app creation. `reddit.com/prefs/apps` no longer
+reliably issues new credentials for new developers, and new API access now
+requires manual approval that's rarely granted for personal or script use.
+
+`src/connectors/reddit_connector.py` is fully implemented and will work
+immediately if you already hold approved credentials, or if Reddit reopens
+self-service access in the future — but it's deliberately left out of
+`LIVE_SOURCES` in `src/connectors/__init__.py` so the Settings tab doesn't
+offer a source that will just fail for almost everyone. Check
+https://support.reddithelp.com for the current policy before re-enabling it.
 
 ### Adding a new source later
 
@@ -151,6 +171,8 @@ GaneshStreamApp/
     ├── connectors/
     │   ├── base.py
     │   ├── mastodon_connector.py
+    │   ├── bluesky_connector.py
+    │   ├── reddit_connector.py    # built, gated by Reddit policy — see README
     │   ├── twitter_connector.py  # stub
     │   └── facebook_connector.py # stub
     ├── analysis/

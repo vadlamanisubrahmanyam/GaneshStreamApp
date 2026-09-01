@@ -35,15 +35,24 @@ tab_settings, tab_run, tab_dashboard = st.tabs(["⚙️ Settings", "▶️ Run C
 with tab_settings:
     st.subheader("Analysis profile")
 
-    all_sources = ["mastodon", "twitter", "facebook"]
+    all_sources = ["mastodon", "bluesky", "reddit", "twitter", "facebook"]
+    SOURCE_LABELS = {
+        "reddit": "Reddit (blocked — Reddit's Responsible Builder Policy)",
+    }
     source = st.selectbox(
         "Source",
         all_sources,
         index=all_sources.index(get_val(config, "search_settings", "source", "mastodon")),
-        format_func=lambda s: s.capitalize() if s in LIVE_SOURCES else f"{s.capitalize()} (coming soon)",
+        format_func=lambda s: s.capitalize() if s in LIVE_SOURCES else SOURCE_LABELS.get(s, f"{s.capitalize()} (coming soon)"),
     )
-    if source not in LIVE_SOURCES:
-        st.info(f"{source.capitalize()} isn't built yet — see the roadmap in README.md. Pick Mastodon for now.")
+    if source == "reddit":
+        st.warning(
+            "Reddit closed self-service API app creation in Nov 2025. The connector code "
+            "is ready (`src/connectors/reddit_connector.py`) but needs approved credentials, "
+            "which Reddit rarely grants for personal use. Pick Mastodon or Bluesky for now."
+        )
+    elif source not in LIVE_SOURCES:
+        st.info(f"{source.capitalize()} isn't built yet — see the roadmap in README.md. Pick Mastodon or Bluesky for now.")
 
     topic = st.text_input("Search topic / hashtag", value=get_val(config, "search_settings", "topic", "AI"))
     limit = st.slider("Posts limit", 1, 50, value=get_val(config, "search_settings", "limit", 10))
