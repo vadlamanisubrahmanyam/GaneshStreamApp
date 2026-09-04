@@ -19,6 +19,17 @@ few pieces that were never actually wired together correctly:
 | Config manager, collector, and dashboard were 3 separate Streamlit/CLI processes talking over subprocess stdout (fragile, encoding issues) | Merged into one `app.py` with three tabs; collector runs in-process |
 | Errors were swallowed by broad `try/except` blocks | Failures now surface in the UI log instead of a generic "Execution Error" |
 | Gemini model was a hardcoded string (`gemini-2.0-flash`), which Google later retired, breaking every analysis with a 404 | Model is now a dropdown fetched live from `client.models.list()`, so it always matches what Google currently offers |
+| Data lived in a local SQLite file — Streamlit Community Cloud doesn't guarantee that survives redeploys/restarts, so "history" quietly disappeared | Storage moved to Supabase Postgres — genuinely persistent, survives redeploys/sleep cycles |
+| No way to distinguish "this run" from "everything ever collected" | Every row is tagged with a `run_id`; a **Latest Run** tab shows just the most recent run, a **Historic Feed** tab shows everything with filters and charts |
+| Post content was stored/analyzed exactly as fetched, profanity included | Content is passed through a local profanity filter (masks bad words with `*`) before it's analyzed or stored |
+
+## v2.2 additions
+
+- **Content moderation** — `src/moderation.py` masks profanity in post content (via `better-profanity`, a local wordlist — no external API call) before it's ever analyzed or saved. Applies to every source.
+- **Persistent storage (Supabase Postgres)** — replaces the local SQLite file. See "Database setup" below.
+- **Run tracking** — each collector run gets a UUID (`run_id`), stored on every row it produces.
+- **Latest Run tab** — shows only the most recently collected run (found by querying the DB for the newest `run_id`, not by session state — so it's correct even in a fresh browser tab or after a redeploy).
+- **Historic Feed tab** — every row ever collected, with filters (topic, source, sentiment, date range, free-text search) and five charts: sentiment distribution, volume by source, sentiment trend over time by topic, average sentiment by topic, and score distribution. Includes a CSV export of whatever's currently filtered.
 
 ## Running it locally (step by step)
 
@@ -49,6 +60,19 @@ Open `.env` and fill in:
 - `MASTODON_API_BASE_URL` — defaults to `https://mastodon.social`; change if you use a different instance
 - `BLUESKY_HANDLE` / `BLUESKY_APP_PASSWORD` — create an App Password in the Bluesky app under Settings → App Passwords (never your main password)
 - `REDDIT_ID` / `REDDIT_SECRET` — optional, only if you already have approved Reddit API credentials (see "About Reddit" below)
+- `DATABASE_URL` — your Supabase Postgres connection string (see "Database setup" below)
+
+### Database setup (Supabase Postgres)
+
+1. In your Supabase project: **Project Settings → Database → Connection string → Session pooler** (port 5432). This is the one that works on the free tier — the direct connection and the transaction pooler both fail there due to IPv4 compatibility.
+2. Copy the full string exactly as given and paste it into `DATABASE_URL` in `.env`.
+3. That's it — `DatabaseManager` creates the `sentiment_results` table automatically the first time the app connects; no manual migration needed.
+4. You can verify it's working anytime from the Settings tab's **🔌 Test database connection** button.
+
+Since this is a real hosted database rather than a file on disk, the same
+`DATABASE_URL` works whether you're running `streamlit run app.py` on your
+laptop or deployed on Streamlit Community Cloud — both write to and read
+from the same history.
 
 Never commit `.env` — it's already in `.gitignore`.
 
@@ -61,7 +85,8 @@ This opens `http://localhost:8501` in your browser. Streamlit keeps running in t
 **6. Use it**
 - **Settings tab** — pick a topic/hashtag, post limit, throttle seconds, and a Gemini model from the dropdown (this list is fetched live from Google every time you open the tab or click Refresh — see "Why a dropdown, not a hardcoded model" below). Click **Save settings**.
 - **Run Collector tab** — click **Run now**. A live log shows each post being fetched, analyzed, and saved.
-- **Dashboard tab** — filter by topic, see average sentiment score and the full results table.
+- **Latest Run tab** — just the run you triggered most recently: post count, average sentiment, and the results table.
+- **Historic Feed tab** — everything ever collected. Filter by topic, source, sentiment, date range, or free-text search; five charts update live with your filters; export the filtered set as CSV.
 
 ### Why a dropdown, not a hardcoded model name
 
@@ -101,6 +126,7 @@ This is what Streamlit itself is built for, it's free, and it fits your
    MASTODON_API_BASE_URL = "https://mastodon.social"
    BLUESKY_HANDLE = "your-handle.bsky.social"
    BLUESKY_APP_PASSWORD = "your-app-password"
+   DATABASE_URL = "your-supabase-session-pooler-connection-string"
    ```
    Streamlit Community Cloud exposes these as environment variables, so no
    code changes are needed — `os.getenv(...)` picks them up the same way.
@@ -111,7 +137,9 @@ This is what Streamlit itself is built for, it's free, and it fits your
 12 hours with no traffic (auto-wakes on the next visit, just takes a few
 seconds), and you get one private app for free — unlimited public ones.
 For a personal sentiment-tracking tool run occasionally, this is more than
-enough.
+enough. Since your data now lives in Supabase Postgres rather than on the
+app's local disk, that sleep/wake cycle (and any redeploy) no longer costs
+you your history — only the SQLite version had that problem.
 
 If you outgrow that later (need it always-on, more memory, background
 jobs), Render and Railway both have free/low-cost tiers that run a
@@ -157,17 +185,16 @@ https://support.reddithelp.com for the current policy before re-enabling it.
 
 ```
 GaneshStreamApp/
-├── app.py                        # single Streamlit app (Settings / Run / Dashboard)
+├── app.py                        # single Streamlit app (Settings / Run / Latest Run / Historic Feed)
 ├── requirements.txt
 ├── .env.example
-├── config/
-│   └── search_config.yaml        # written by the app, not committed
-├── data/
-│   └── stream_results.db         # SQLite, not committed
+└── config/
+    └── search_config.yaml        # written by the app, not committed
 └── src/
     ├── config.py                 # load/save settings
     ├── models.py                 # SocialPost, SentimentResult
-    ├── orchestrator.py           # fetch -> dedupe -> analyze -> save
+    ├── moderation.py              # profanity masking (better-profanity)
+    ├── orchestrator.py           # fetch -> moderate -> analyze -> save (tags each row with a run_id)
     ├── connectors/
     │   ├── base.py
     │   ├── mastodon_connector.py
@@ -178,5 +205,5 @@ GaneshStreamApp/
     ├── analysis/
     │   └── engine.py             # Gemini sentiment analysis
     └── database/
-        └── manager.py            # SQLite persistence
+        └── manager.py            # Supabase Postgres persistence, run tracking
 ```

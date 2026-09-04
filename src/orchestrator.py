@@ -3,7 +3,8 @@ from typing import Callable, Optional
 
 from .analysis.engine import AnalysisEngine
 from .connectors import REGISTRY
-from .database.manager import DatabaseManager
+from .database.manager import DatabaseManager, new_run_id
+from .moderation import clean_text
 
 
 class ProjectOrchestrator:
@@ -28,9 +29,10 @@ class ProjectOrchestrator:
         limit: int,
         sleep_time: float,
         on_log: Optional[Callable[[str], None]] = None,
-    ) -> int:
-        """Returns the number of newly-saved posts."""
+    ) -> tuple[int, str]:
+        """Returns (number of newly-saved posts, run_id for this run)."""
         log = on_log or (lambda msg: None)
+        run_id = new_run_id()
 
         if not self.connector.is_configured():
             raise RuntimeError(
@@ -43,9 +45,13 @@ class ProjectOrchestrator:
 
         saved = 0
         for i, post in enumerate(posts, start=1):
-            if self.db.is_duplicate(post.id):
+            if self.db.is_duplicate(post.id, post.source):
                 log(f"[{i}/{len(posts)}] Skipping @{post.author} — already analyzed.")
                 continue
+
+            # Mask profanity in the content before it's analyzed or stored,
+            # so nothing offensive ever lands in the database or dashboard.
+            post.content = clean_text(post.content)
 
             try:
                 analysis = self.ai_brain.analyze_content(post.content)
@@ -53,7 +59,7 @@ class ProjectOrchestrator:
                 log(f"[{i}/{len(posts)}] ⚠️ Analysis failed for @{post.author}: {e}")
                 continue
 
-            self.db.save_analysis(post, analysis)
+            self.db.save_analysis(post, analysis, run_id=run_id)
             saved += 1
             log(
                 f"[{i}/{len(posts)}] ✅ @{post.author} — {analysis.get('sentiment')} "
@@ -63,5 +69,5 @@ class ProjectOrchestrator:
             if i < len(posts):
                 time.sleep(sleep_time)
 
-        log(f"Done. {saved} new post(s) saved.")
-        return saved
+        log(f"Done. {saved} new post(s) saved. (run_id: {run_id})")
+        return saved, run_id
