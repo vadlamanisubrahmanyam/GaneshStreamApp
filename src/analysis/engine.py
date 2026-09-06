@@ -51,17 +51,39 @@ class AnalysisEngine:
         self.client = genai.Client(api_key=api_key)
         self.model_id = model_id
 
+    SENTIMENT_PROMPT = """\
+Analyze the sentiment of this social media post and return structured JSON.
+
+Scoring rubric (follow exactly):
+- "sentiment": one of "Positive", "Negative", or "Neutral" — the overall tone.
+- "score": a float from -1.0 to 1.0.
+    -1.0 = extremely negative, 0.0 = perfectly neutral, 1.0 = extremely positive.
+    The sign of the score must match the sentiment label
+    (Positive -> score > 0, Negative -> score < 0, Neutral -> score close to 0).
+- "reasoning": one short sentence explaining the classification.
+- "language": the post's language, as an ISO 639-1 code (e.g. "en", "es") if identifiable, else "unknown".
+
+Post to analyze:
+{text}
+"""
+
     def analyze_content(self, text: str) -> dict:
         """
         Returns a dict with sentiment/score/reasoning/language, or raises
         on failure (the orchestrator decides how to log/handle it — the
         old code swallowed every error here and returned None, which made
         failures invisible).
+
+        The scoring rubric is spelled out explicitly in the prompt (see
+        SENTIMENT_PROMPT above) rather than left to the model's own
+        implicit judgment — earlier versions just said "analyze the
+        sentiment" with no defined scale, so the -1..1 range the dashboard
+        charts assume was never actually guaranteed by the model.
         """
         try:
             response = self.client.models.generate_content(
                 model=self.model_id,
-                contents=f"Analyze the sentiment of this social media post:\n\n{text}",
+                contents=self.SENTIMENT_PROMPT.format(text=text),
                 config={
                     "response_mime_type": "application/json",
                     "response_schema": SentimentResult,
@@ -76,4 +98,10 @@ class AnalysisEngine:
                     "currently offered."
                 ) from e
             raise
-        return response.parsed.model_dump()
+        result = response.parsed.model_dump()
+        # Defensive clamp: models don't always perfectly obey a numeric
+        # rubric even when told to. This guarantees the -1..1 contract the
+        # rest of the app (dashboard chart axes, in particular) relies on,
+        # regardless of what any given model actually returns.
+        result["score"] = max(-1.0, min(1.0, result.get("score", 0.0)))
+        return result

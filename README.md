@@ -62,12 +62,63 @@ Open `.env` and fill in:
 - `REDDIT_ID` / `REDDIT_SECRET` — optional, only if you already have approved Reddit API credentials (see "About Reddit" below)
 - `DATABASE_URL` — your Supabase Postgres connection string (see "Database setup" below)
 
+## How sentiment scoring works
+
+Sentiment analysis is entirely delegated to Gemini via a structured
+output schema (`SentimentResult` in `src/models.py`) — there's no
+separate scoring algorithm in this codebase. What the app *does* control
+is the rubric given to the model, defined in `SENTIMENT_PROMPT` in
+`src/analysis/engine.py`:
+
+- **`sentiment`** — one of `"Positive"`, `"Negative"`, or `"Neutral"`.
+- **`score`** — a float from **-1.0 to 1.0**: -1.0 is extremely negative,
+  0.0 is perfectly neutral, 1.0 is extremely positive. The sign is
+  required to match the sentiment label (e.g. Positive must score > 0).
+- **`reasoning`** — one short sentence explaining the classification.
+- **`language`** — an ISO 639-1 code (e.g. `en`, `es`) if identifiable.
+
+This rubric is spelled out explicitly in the prompt rather than left
+implicit — an earlier version of this code just said "analyze the
+sentiment" with no defined scale, which meant the -1..1 range the
+Historic Feed charts' axes assume was never actually guaranteed by the
+model. As defense in depth (LLMs don't always perfectly obey a numeric
+instruction even when told to), `analyze_content()` also clamps the
+returned score into the -1..1 range in code before it's stored, so the
+rest of the app can rely on that contract regardless of what any given
+model actually returns.
+
+One consequence worth knowing: **scores aren't necessarily comparable
+across different Gemini models.** If you switch models in Settings
+partway through your usage, two posts with identical sentiment might get
+slightly different scores depending on which model analyzed them — the
+rubric constrains the range and sign, not the model's internal judgment
+of *exactly* how positive or negative something is.
+
 ### Database setup (Supabase Postgres)
 
 1. In your Supabase project: **Project Settings → Database → Connection string → Session pooler** (port 5432). This is the one that works on the free tier — the direct connection and the transaction pooler both fail there due to IPv4 compatibility.
 2. Copy the full string exactly as given and paste it into `DATABASE_URL` in `.env`.
 3. That's it — `DatabaseManager` creates the `sentiment_results` table automatically the first time the app connects; no manual migration needed.
-4. You can verify it's working anytime from the Settings tab's **🔌 Test database connection** button.
+4. You can verify it's working anytime from the Settings tab's **🔌 Test database connection** button, or by running `python test_db_connection.py` directly (bypasses Streamlit entirely — useful for isolating connection issues).
+
+### ⚠️ If you get "password authentication failed"
+
+Supabase's **auto-generated passwords include special characters** (`+`,
+`/`, `@`, etc.) that break a raw Postgres connection string unless they're
+URL-encoded first — `psycopg2`/SQLAlchemy will otherwise misparse where
+the password ends and the host begins. Two ways to fix it:
+
+- **Easiest:** Project Settings → Database → Reset Database Password →
+  type your own password using only letters and numbers. No encoding
+  needed, and this is what resolves it for most people.
+- **If you want to keep an auto-generated password:** URL-encode it
+  before putting it in the connection string, e.g. in Python:
+  `urllib.parse.quote_plus("your-password-here")`.
+
+Also worth knowing: **editing `.env` doesn't take effect until you fully
+restart** `streamlit run app.py` (stop with Ctrl+C, run it again) —
+Streamlit's auto-rerun-on-interaction does not reload `.env`, so testing
+a new password without restarting will silently keep testing the old one.
 
 Since this is a real hosted database rather than a file on disk, the same
 `DATABASE_URL` works whether you're running `streamlit run app.py` on your
