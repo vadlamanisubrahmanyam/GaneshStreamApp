@@ -11,3 +11,4 @@ plotly>=5.22
 SQLAlchemy>=2.0
 psycopg2-binary>=2.9
 better-profanity>=0.7
+pycountry>=24.6

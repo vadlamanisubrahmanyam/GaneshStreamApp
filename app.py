@@ -18,6 +18,7 @@ from src.connectors import LIVE_SOURCES
 from src.database.manager import DatabaseManager, TABLE_NAME
 from src.orchestrator import ProjectOrchestrator
 from src.analysis.engine import list_models, DEFAULT_MODEL
+from src.language_names import language_display_name
 
 load_dotenv()
 
@@ -202,6 +203,8 @@ with tab_latest:
             c3.metric("Topic(s)", ", ".join(df["topic"].dropna().unique().tolist()) if len(df) else "—")
             st.caption(f"Run ID: `{latest_run_id}`")
             st.divider()
+            if len(df):
+                df["language"] = df["language"].apply(language_display_name)
             st.dataframe(df, use_container_width=True)
 
 # ---------------------------------------------------------------------------
@@ -351,7 +354,9 @@ with tab_historic:
                     st.plotly_chart(fig_hist, use_container_width=True)
 
                 st.divider()
-                st.dataframe(filtered, use_container_width=True)
+                display_df = filtered.copy()
+                display_df["language"] = display_df["language"].apply(language_display_name)
+                st.dataframe(display_df, use_container_width=True)
                 st.download_button(
                     "⬇️ Download filtered data as CSV",
                     filtered.to_csv(index=False).encode("utf-8"),
