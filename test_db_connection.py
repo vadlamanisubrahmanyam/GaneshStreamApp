@@ -10,6 +10,7 @@ here depends on the rest of the GaneshStreamApp codebase.
 """
 import os
 import sys
+import streamlit as st
 
 from dotenv import load_dotenv
 
@@ -17,9 +18,14 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-if not DATABASE_URL:
-    print("❌ DATABASE_URL is not set in your .env file.")
-    sys.exit(1)
+if "DATABASE_URL" in st.secrets:
+    DATABASE_URL = st.secrets["DATABASE_URL"]
+elif DATABASE_URL:
+    DATABASE_URL = os.getenv("DATABASE_URL")
+else:
+    if not DATABASE_URL:
+        print("❌ DATABASE_URL is not set in your .env file.")
+        sys.exit(1)
 
 # Show the connection details being used, with the password masked, so you
 # can visually confirm this script is reading what you think it's reading.
